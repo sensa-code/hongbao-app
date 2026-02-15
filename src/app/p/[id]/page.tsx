@@ -83,28 +83,35 @@ export default function ProjectPage() {
     }
   }, [projectId])
 
-  // Draw handler
-  const handleDraw = useCallback(async () => {
+  // Draw handler — targetDate 可選，用於補抽歷史日期
+  const handleDraw = useCallback(async (targetDate?: string) => {
     if (!project || drawing) return
     const trimmed = myName.trim()
     if (!trimmed) { setError('請輸入你的全名'); return }
 
-    const t = todayStr()
-    if (t < project.start_date || t > project.end_date) {
-      setError('今天不在活動期間內喔！'); return
+    const today = todayStr()
+    const drawDate = targetDate || today
+
+    // 驗證日期在專案範圍內
+    if (drawDate < project.start_date || drawDate > project.end_date) {
+      setError('該日期不在活動期間內喔！'); return
+    }
+    // 補抽不能抽未來的日期
+    if (drawDate > today) {
+      setError('不能抽未來日期的紅包喔！'); return
     }
 
-    const todayD = draws.filter((d) => d.draw_date === t)
-    if (todayD.find((d) => d.name === trimmed)) {
-      const found = todayD.find((d) => d.name === trimmed)!
-      setError(`你今天已經抽過了！金額：${formatMoney(found.amount)}`)
+    const dayD = draws.filter((d) => d.draw_date === drawDate)
+    if (dayD.find((d) => d.name === trimmed)) {
+      const found = dayD.find((d) => d.name === trimmed)!
+      setError(`你在 ${drawDate.slice(5).replace('-', '/')} 已經抽過了！金額：${formatMoney(found.amount)}`)
       return
     }
-    if (todayD.length >= project.total_people) {
-      setError('今天的紅包已經全部抽完囉！'); return
+    if (dayD.length >= project.total_people) {
+      setError(`${drawDate.slice(5).replace('-', '/')} 的紅包已經全部抽完囉！`); return
     }
 
-    const amount = calculateDraw(project, todayD)
+    const amount = calculateDraw(project, dayD)
     if (amount === null) { setError('無法計算紅包金額，請聯繫主辦人'); return }
 
     setError('')
@@ -116,7 +123,7 @@ export default function ProjectPage() {
         project_id: projectId,
         name: trimmed,
         amount,
-        draw_date: t,
+        draw_date: drawDate,
       })
       // 立即更新 state，不依賴 Realtime
       setDraws((prev) => {
@@ -124,11 +131,10 @@ export default function ProjectPage() {
         return [...prev, newDraw]
       })
       setAnimating(amount)
-    } catch (err: any) {
-      const msg = err?.message || err?.code || ''
-      if (msg.includes('idx_draws_unique_per_day') || msg.includes('duplicate') || msg.includes('409') || err?.code === '23505') {
-        setError('你今天已經抽過了！')
-        // 重新載入紀錄確保 state 正確
+    } catch (err: unknown) {
+      const msg = (err as { message?: string; code?: string })?.message || (err as { code?: string })?.code || ''
+      if (msg.includes('idx_draws_unique_per_day') || msg.includes('duplicate') || msg.includes('409') || (err as { code?: string })?.code === '23505') {
+        setError(`你在 ${drawDate.slice(5).replace('-', '/')} 已經抽過了！`)
         getDraws(projectId).then(setDraws).catch(() => {})
       } else {
         setError(msg || '抽獎失敗，請稍後再試')
@@ -314,7 +320,7 @@ export default function ProjectPage() {
                   value={myName}
                   onChange={(e) => setMyName(e.target.value)}
                   placeholder="請輸入全名（例：王小明）"
-                  onKeyDown={(e) => e.key === 'Enter' && handleDraw()}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleDraw() }}
                 />
               </div>
               {error && (
@@ -333,10 +339,10 @@ export default function ProjectPage() {
                   boxShadow: isActive && remaining > 0 ? '0 6px 30px rgba(204,0,0,0.5)' : 'none',
                   animation: isActive && remaining > 0 ? 'shimmer 3s linear infinite' : 'none',
                 }}
-                onClick={handleDraw}
+                onClick={() => handleDraw()}
                 disabled={!isActive || remaining <= 0 || drawing}
               >
-                {drawing ? '抽獎中...' : isBeforeStart ? '活動尚未開始' : isEnded ? '活動已結束' : remaining <= 0 ? '今日紅包已抽完' : '🧧 開始抽紅包！'}
+                {drawing ? '抽獎中...' : isBeforeStart ? '活動尚未開始' : isEnded ? '活動已結束（可補抽下方日期）' : remaining <= 0 ? '今日紅包已抽完' : '🧧 開始抽紅包！'}
               </button>
             </Card>
 
@@ -347,6 +353,54 @@ export default function ProjectPage() {
               </h2>
               <Leaderboard draws={todayDraws} />
             </Card>
+
+            {/* Catch-up draw (補抽) */}
+            {(() => {
+              const trimmed = myName.trim()
+              const missedDays = projectDays.filter((date) => {
+                if (date >= t) return false // 只看過去的日期（不含今天）
+                const dayD = draws.filter((d) => d.draw_date === date)
+                if (dayD.length >= project.total_people) return false // 該天紅包已抽完
+                if (trimmed && dayD.find((d) => d.name === trimmed)) return false // 該用戶已抽過
+                return true
+              })
+              if (missedDays.length === 0) return null
+              return (
+                <Card>
+                  <h2 className="text-[17px] font-bold tracking-wider mb-2" style={{ color: '#ffd700' }}>
+                    📦 補抽過去的紅包
+                  </h2>
+                  <p className="text-xs mb-3" style={{ color: 'rgba(255,215,0,0.5)' }}>
+                    {trimmed ? `${trimmed}，以下日期你還沒抽過，可以補抽！` : '輸入姓名後，可補抽錯過的日期'}
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    {missedDays.map((date) => {
+                      const dayD = draws.filter((d) => d.draw_date === date)
+                      const dayRemaining = project.total_people - dayD.length
+                      return (
+                        <button
+                          key={date}
+                          onClick={() => handleDraw(date)}
+                          disabled={drawing || !trimmed}
+                          className="px-3.5 py-2 rounded-xl text-sm font-semibold tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                          style={{
+                            background: 'linear-gradient(135deg, rgba(204,0,0,0.6) 0%, rgba(255,34,0,0.6) 100%)',
+                            color: '#ffd700',
+                            border: '1.5px solid rgba(255,215,0,0.25)',
+                            boxShadow: '0 2px 8px rgba(204,0,0,0.3)',
+                          }}
+                        >
+                          <span className="block text-[15px]">{date.slice(5).replace('-', '/')}</span>
+                          <span className="block text-[10px] mt-0.5" style={{ color: 'rgba(255,215,0,0.6)' }}>
+                            剩 {dayRemaining} 個
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </Card>
+              )
+            })()}
           </>
         )}
 
