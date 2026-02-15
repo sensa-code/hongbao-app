@@ -147,11 +147,17 @@ export function calculateDraw(
   return Math.round(lo + Math.random() * (hi - lo))
 }
 
-// ─── Tiered draw calculation (獎級抽獎) ───
+// ─── Tiered draw calculation (獎級抽獎，含預算控制) ───
 export function calculateTieredDraw(
   tiers: PrizeTier[],
-  dayDraws: Draw[]
+  dayDraws: Draw[],
+  dailyBudget: number
 ): { amount: number; tierName: string } | null {
+  // 計算剩餘預算
+  const usedAmount = dayDraws.reduce((s, d) => s + d.amount, 0)
+  const leftAmount = dailyBudget - usedAmount
+  if (leftAmount <= 0) return null
+
   // 統計每個獎級今日已抽名額
   const usedMap: Record<string, number> = {}
   for (const d of dayDraws) {
@@ -168,15 +174,37 @@ export function calculateTieredDraw(
 
   if (available.length === 0) return null
 
-  // 計算總剩餘名額
-  const totalRemaining = available.reduce((sum, tier) => {
+  // 計算總剩餘名額（含這個人）
+  const remainingPeople = available.reduce((sum, tier) => {
     return sum + (tier.quota - (usedMap[tier.name] || 0))
   }, 0)
 
-  // 按剩餘名額加權隨機選獎級
-  let rand = Math.random() * totalRemaining
-  let selectedTier = available[available.length - 1] // fallback to last (普獎)
-  for (const tier of available) {
+  if (remainingPeople === 0) return null
+
+  // 計算這個人最多能拿多少（確保後面的人每人至少拿 $1）
+  const globalMinAmount = Math.min(...available.map((t) => t.min))
+  const reserveForOthers = (remainingPeople - 1) * globalMinAmount
+  const maxForThisPerson = leftAmount - reserveForOthers
+
+  // 過濾掉「最低金額超出預算可負擔」的高價獎級
+  const affordable = available.filter((tier) => tier.min <= maxForThisPerson)
+
+  // 如果沒有任何獎級負擔得起，使用降級策略
+  if (affordable.length === 0) {
+    const fallbackAmount = Math.max(1, Math.round(leftAmount / remainingPeople))
+    // 找最便宜的獎級作為名稱
+    const cheapest = available.reduce((a, b) => (a.min < b.min ? a : b))
+    return { amount: fallbackAmount, tierName: cheapest.name }
+  }
+
+  // 按剩餘名額加權隨機選獎級（只從 affordable 中選）
+  const affordableRemaining = affordable.reduce((sum, tier) => {
+    return sum + (tier.quota - (usedMap[tier.name] || 0))
+  }, 0)
+
+  let rand = Math.random() * affordableRemaining
+  let selectedTier = affordable[affordable.length - 1] // fallback to last
+  for (const tier of affordable) {
     const remaining = tier.quota - (usedMap[tier.name] || 0)
     rand -= remaining
     if (rand <= 0) {
@@ -185,10 +213,20 @@ export function calculateTieredDraw(
     }
   }
 
-  // 在該獎級的 min~max 範圍內隨機金額
-  const amount = Math.round(
-    selectedTier.min + Math.random() * (selectedTier.max - selectedTier.min)
-  )
+  // 在該獎級的 min~max 範圍內隨機金額，但不超過 maxForThisPerson
+  let amount: number
+  if (remainingPeople === 1) {
+    // 最後一人：把剩餘預算全給，但不超過獎級上限
+    amount = Math.round(Math.min(leftAmount, selectedTier.max))
+  } else {
+    const tierMax = Math.min(selectedTier.max, maxForThisPerson)
+    const tierMin = selectedTier.min
+    amount = Math.round(tierMin + Math.random() * (tierMax - tierMin))
+  }
+
+  // 最終安全檢查：確保不超過剩餘預算
+  amount = Math.min(amount, Math.round(leftAmount))
+  amount = Math.max(1, amount)
 
   return { amount, tierName: selectedTier.name }
 }

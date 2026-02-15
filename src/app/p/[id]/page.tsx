@@ -119,7 +119,7 @@ export default function ProjectPage() {
     const hasTiers = project.prize_tiers && project.prize_tiers.length > 0
 
     if (hasTiers) {
-      const result = calculateTieredDraw(project.prize_tiers!, dayD)
+      const result = calculateTieredDraw(project.prize_tiers!, dayD, project.daily_budget)
       if (!result) { setError('所有獎級名額已用完！'); return }
       amount = result.amount
       tierName = result.tierName
