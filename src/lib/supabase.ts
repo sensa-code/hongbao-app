@@ -53,6 +53,18 @@ export async function getProject(id: string) {
   return data as Project
 }
 
+export async function getProjectsByIds(ids: string[]): Promise<Project[]> {
+  if (ids.length === 0) return []
+  const { data, error } = await supabase
+    .from('projects')
+    .select('*')
+    .in('id', ids)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  return (data || []) as Project[]
+}
+
 export async function getDraws(projectId: string) {
   const { data, error } = await supabase
     .from('draws')
@@ -102,16 +114,28 @@ export function calculateDraw(
   return Math.round(lo + Math.random() * (hi - lo))
 }
 
-// ─── Date helpers ───
-export const todayStr = () => new Date().toISOString().slice(0, 10)
+// ─── Date helpers (台灣時區 UTC+8) ───
+export function todayStr(): string {
+  const now = new Date()
+  const offset = now.getTimezoneOffset()
+  const local = new Date(now.getTime() - offset * 60000)
+  return local.toISOString().slice(0, 10)
+}
 
 export function dateRange(start: string, end: string): string[] {
   const days: string[] = []
-  const d = new Date(start + 'T00:00:00')
-  const endD = new Date(end + 'T00:00:00')
-  while (d <= endD) {
-    days.push(d.toISOString().slice(0, 10))
-    d.setDate(d.getDate() + 1)
+  // 用純字串運算避免 UTC 偏移
+  const [sy, sm, sd] = start.split('-').map(Number)
+  const [ey, em, ed] = end.split('-').map(Number)
+  const startD = new Date(sy, sm - 1, sd)
+  const endD = new Date(ey, em - 1, ed)
+  const cur = new Date(startD)
+  while (cur <= endD) {
+    const y = cur.getFullYear()
+    const m = String(cur.getMonth() + 1).padStart(2, '0')
+    const d = String(cur.getDate()).padStart(2, '0')
+    days.push(`${y}-${m}-${d}`)
+    cur.setDate(cur.getDate() + 1)
   }
   return days
 }
