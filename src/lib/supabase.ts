@@ -104,13 +104,36 @@ export function calculateDraw(
 
   const usedAmount = dayDraws.reduce((s, d) => s + d.amount, 0)
   const leftAmount = daily_budget - usedAmount
+
+  // 剩餘金額不夠發最低金額時，把剩餘全部給這個人
+  if (leftAmount <= min_amount) {
+    return Math.max(1, Math.round(leftAmount))
+  }
+
   if (remaining === 1) return Math.round(leftAmount)
 
+  // 計算合理的上下限，確保後面的人至少能拿到 min_amount
   const otherMin = (remaining - 1) * min_amount
-  const otherMax = (remaining - 1) * max_amount
-  const lo = Math.max(min_amount, leftAmount - otherMax)
+  const lo = Math.max(min_amount, leftAmount - (remaining - 1) * max_amount)
   const hi = Math.min(max_amount, leftAmount - otherMin)
-  if (lo > hi) return null
+
+  // 如果正常範圍算不出來（前面的人抽太多），使用均分 ± 浮動的降級策略
+  if (lo > hi) {
+    const avg = leftAmount / remaining
+    // 如果均分都不到最低金額，就直接給均分值
+    if (avg < min_amount) {
+      return Math.max(1, Math.round(avg))
+    }
+    // 均分值在合理範圍，加一點隨機浮動（±30%）
+    const fluctuation = avg * 0.3
+    const fallbackLo = Math.max(min_amount, avg - fluctuation)
+    const fallbackHi = Math.min(max_amount, avg + fluctuation)
+    // 但不能超過「剩餘金額 - 其他人每人 $1」的上限
+    const safeHi = Math.min(fallbackHi, leftAmount - (remaining - 1))
+    const safeLo = Math.min(fallbackLo, safeHi)
+    return Math.round(safeLo + Math.random() * (safeHi - safeLo))
+  }
+
   return Math.round(lo + Math.random() * (hi - lo))
 }
 
