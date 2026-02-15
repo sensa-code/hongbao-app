@@ -112,18 +112,26 @@ export default function ProjectPage() {
     localStorage.setItem(NAME_KEY, trimmed)
 
     try {
-      await insertDraw({
+      const newDraw = await insertDraw({
         project_id: projectId,
         name: trimmed,
         amount,
         draw_date: t,
       })
+      // 立即更新 state，不依賴 Realtime
+      setDraws((prev) => {
+        if (prev.find((d) => d.id === newDraw.id)) return prev
+        return [...prev, newDraw]
+      })
       setAnimating(amount)
     } catch (err: any) {
-      if (err?.message?.includes('idx_draws_unique_per_day')) {
+      const msg = err?.message || err?.code || ''
+      if (msg.includes('idx_draws_unique_per_day') || msg.includes('duplicate') || msg.includes('409') || err?.code === '23505') {
         setError('你今天已經抽過了！')
+        // 重新載入紀錄確保 state 正確
+        getDraws(projectId).then(setDraws).catch(() => {})
       } else {
-        setError(err?.message || '抽獎失敗，請稍後再試')
+        setError(msg || '抽獎失敗，請稍後再試')
       }
     } finally {
       setDrawing(false)
