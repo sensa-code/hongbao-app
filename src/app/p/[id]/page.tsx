@@ -8,6 +8,7 @@ import {
   getDraws,
   insertDraw,
   calculateDraw,
+  calculateTieredDraw,
   todayStr,
   dateRange,
   formatMoney,
@@ -31,6 +32,7 @@ export default function ProjectPage() {
   const [notFound, setNotFound] = useState(false)
   const [view, setView] = useState<'main' | 'history' | 'cumulative'>('main')
   const [animating, setAnimating] = useState<number | null>(null)
+  const [animatingTier, setAnimatingTier] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [drawing, setDrawing] = useState(false)
   const [historyDate, setHistoryDate] = useState(todayStr())
@@ -111,8 +113,21 @@ export default function ProjectPage() {
       setError(`${drawDate.slice(5).replace('-', '/')} 的紅包已經全部抽完囉！`); return
     }
 
-    const amount = calculateDraw(project, dayD)
-    if (amount === null) { setError('無法計算紅包金額，請聯繫主辦人'); return }
+    // 根據是否有獎級設定選擇計算邏輯
+    let amount: number
+    let tierName: string | undefined
+    const hasTiers = project.prize_tiers && project.prize_tiers.length > 0
+
+    if (hasTiers) {
+      const result = calculateTieredDraw(project.prize_tiers!, dayD)
+      if (!result) { setError('所有獎級名額已用完！'); return }
+      amount = result.amount
+      tierName = result.tierName
+    } else {
+      const result = calculateDraw(project, dayD)
+      if (result === null) { setError('無法計算紅包金額，請聯繫主辦人'); return }
+      amount = result
+    }
 
     setError('')
     setDrawing(true)
@@ -124,12 +139,14 @@ export default function ProjectPage() {
         name: trimmed,
         amount,
         draw_date: drawDate,
+        ...(tierName ? { tier_name: tierName } : {}),
       })
       // 立即更新 state，不依賴 Realtime
       setDraws((prev) => {
         if (prev.find((d) => d.id === newDraw.id)) return prev
         return [...prev, newDraw]
       })
+      setAnimatingTier(tierName || null)
       setAnimating(amount)
     } catch (err: unknown) {
       const msg = (err as { message?: string; code?: string })?.message || (err as { code?: string })?.code || ''
@@ -208,7 +225,7 @@ export default function ProjectPage() {
   return (
     <div className="min-h-screen pb-20">
       {animating !== null && (
-        <EnvelopeAnimation amount={animating} onDone={() => setAnimating(null)} />
+        <EnvelopeAnimation amount={animating} tierName={animatingTier || undefined} onDone={() => { setAnimating(null); setAnimatingTier(null) }} />
       )}
 
       {/* Header */}
@@ -305,6 +322,40 @@ export default function ProjectPage() {
               <ProgressBar current={usedToday} total={project.daily_budget} color="#ff6644" />
             </Card>
 
+            {/* Tier progress (獎級進度) */}
+            {project.prize_tiers && project.prize_tiers.length > 0 && (
+              <Card className="!py-3.5 !px-4 mb-4">
+                <div className="text-xs font-semibold tracking-wider mb-2" style={{ color: 'rgba(255,215,0,0.7)' }}>
+                  🏆 今日獎級名額
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {project.prize_tiers.map((tier) => {
+                    const used = todayDraws.filter((d) => d.tier_name === tier.name).length
+                    const isFull = used >= tier.quota
+                    return (
+                      <div key={tier.name} className="flex items-center gap-2">
+                        <span className="text-xs font-semibold min-w-[52px]" style={{ color: isFull ? 'rgba(255,215,0,0.3)' : '#ffd700' }}>
+                          {tier.name}
+                        </span>
+                        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,215,0,0.1)' }}>
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{
+                              width: `${Math.min(100, (used / tier.quota) * 100)}%`,
+                              background: isFull ? 'rgba(255,215,0,0.3)' : 'linear-gradient(90deg, #ffd700, #ff8866)',
+                            }}
+                          />
+                        </div>
+                        <span className="text-[11px] min-w-[36px] text-right" style={{ color: isFull ? 'rgba(255,215,0,0.3)' : 'rgba(255,215,0,0.7)' }}>
+                          {used}/{tier.quota}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </Card>
+            )}
+
             {/* Draw */}
             <Card>
               <h2 className="text-[17px] font-bold tracking-wider mb-4" style={{ color: '#ffd700' }}>
@@ -351,7 +402,7 @@ export default function ProjectPage() {
               <h2 className="text-[17px] font-bold tracking-wider mb-4" style={{ color: '#ffd700' }}>
                 📊 今日排行
               </h2>
-              <Leaderboard draws={todayDraws} />
+              <Leaderboard draws={todayDraws} showTier={!!project.prize_tiers} />
             </Card>
 
             {/* Catch-up draw (補抽) */}
@@ -446,7 +497,7 @@ export default function ProjectPage() {
                 {historyDate > t ? '這天還沒到喔' : '這天沒有抽獎紀錄'}
               </p>
             ) : (
-              <Leaderboard draws={historyDraws} showTime />
+              <Leaderboard draws={historyDraws} showTime showTier={!!project.prize_tiers} />
             )}
           </Card>
         )}

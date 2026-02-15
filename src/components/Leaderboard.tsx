@@ -11,9 +11,11 @@ const rankStyles = [
 export default function Leaderboard({
   draws,
   showTime = false,
+  showTier = false,
 }: {
   draws: Draw[]
   showTime?: boolean
+  showTier?: boolean
 }) {
   if (draws.length === 0) {
     return (
@@ -37,8 +39,14 @@ export default function Leaderboard({
           <div className="w-9 text-center text-lg">
             {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
           </div>
-          <div className="flex-1 text-[15px] font-semibold text-white/90">
-            {d.name}
+          <div className="flex-1 min-w-0">
+            <div className="text-[15px] font-semibold text-white/90 truncate">{d.name}</div>
+            {showTier && d.tier_name && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded mt-0.5 inline-block"
+                style={{ background: 'rgba(255,215,0,0.12)', color: 'rgba(255,215,0,0.8)' }}>
+                {d.tier_name}
+              </span>
+            )}
           </div>
           <div
             className="font-bold ml-2"

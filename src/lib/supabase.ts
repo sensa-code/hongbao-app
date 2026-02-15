@@ -8,6 +8,13 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 })
 
 // ─── Types ───
+export interface PrizeTier {
+  name: string
+  min: number
+  max: number
+  quota: number
+}
+
 export interface Project {
   id: string
   title: string
@@ -17,6 +24,7 @@ export interface Project {
   max_amount: number
   start_date: string
   end_date: string
+  prize_tiers?: PrizeTier[] | null
   created_at: string
 }
 
@@ -26,12 +34,13 @@ export interface Draw {
   name: string
   amount: number
   draw_date: string
+  tier_name?: string | null
   created_at: string
 }
 
 // ─── API helpers ───
 
-export async function createProject(data: Omit<Project, 'id' | 'created_at'>) {
+export async function createProject(data: Omit<Project, 'id' | 'created_at' | 'prize_tiers'> & { prize_tiers?: PrizeTier[] }) {
   const { data: project, error } = await supabase
     .from('projects')
     .insert(data)
@@ -81,6 +90,7 @@ export async function insertDraw(draw: {
   name: string
   amount: number
   draw_date: string
+  tier_name?: string
 }) {
   const { data, error } = await supabase
     .from('draws')
@@ -135,6 +145,52 @@ export function calculateDraw(
   }
 
   return Math.round(lo + Math.random() * (hi - lo))
+}
+
+// ─── Tiered draw calculation (獎級抽獎) ───
+export function calculateTieredDraw(
+  tiers: PrizeTier[],
+  dayDraws: Draw[]
+): { amount: number; tierName: string } | null {
+  // 統計每個獎級今日已抽名額
+  const usedMap: Record<string, number> = {}
+  for (const d of dayDraws) {
+    if (d.tier_name) {
+      usedMap[d.tier_name] = (usedMap[d.tier_name] || 0) + 1
+    }
+  }
+
+  // 過濾出尚有名額的獎級
+  const available = tiers.filter((tier) => {
+    const used = usedMap[tier.name] || 0
+    return used < tier.quota
+  })
+
+  if (available.length === 0) return null
+
+  // 計算總剩餘名額
+  const totalRemaining = available.reduce((sum, tier) => {
+    return sum + (tier.quota - (usedMap[tier.name] || 0))
+  }, 0)
+
+  // 按剩餘名額加權隨機選獎級
+  let rand = Math.random() * totalRemaining
+  let selectedTier = available[available.length - 1] // fallback to last (普獎)
+  for (const tier of available) {
+    const remaining = tier.quota - (usedMap[tier.name] || 0)
+    rand -= remaining
+    if (rand <= 0) {
+      selectedTier = tier
+      break
+    }
+  }
+
+  // 在該獎級的 min~max 範圍內隨機金額
+  const amount = Math.round(
+    selectedTier.min + Math.random() * (selectedTier.max - selectedTier.min)
+  )
+
+  return { amount, tierName: selectedTier.name }
 }
 
 // ─── Date helpers (台灣時區 UTC+8) ───

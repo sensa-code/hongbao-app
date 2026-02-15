@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createProject, getProjectsByIds, todayStr, dateRange, formatMoney, type Project } from '@/lib/supabase'
+import { createProject, getProjectsByIds, todayStr, dateRange, formatMoney, type Project, type PrizeTier } from '@/lib/supabase'
 import { Lantern, GoldCoin } from '@/components/Decorations'
 
 const MY_PROJECTS_KEY = 'hongbao_my_projects'
@@ -54,18 +54,55 @@ export default function HomePage() {
     endDate: addDays(todayStr(), 6),
   })
 
+  const [useTiers, setUseTiers] = useState(false)
+  const [tiers, setTiers] = useState<PrizeTier[]>([
+    { name: '特大獎', min: 2500, max: 3500, quota: 1 },
+    { name: '大獎', min: 1000, max: 2000, quota: 2 },
+    { name: '三獎', min: 300, max: 800, quota: 3 },
+    { name: '普獎', min: 88, max: 200, quota: 4 },
+  ])
+
   const days =
     form.startDate && form.endDate && form.startDate <= form.endDate
       ? dateRange(form.startDate, form.endDate)
       : []
 
+  // 獎級驗證計算
+  const tierQuotaSum = tiers.reduce((s, t) => s + t.quota, 0)
+  const tierBudgetMin = tiers.reduce((s, t) => s + t.min * t.quota, 0)
+  const tierBudgetMax = tiers.reduce((s, t) => s + t.max * t.quota, 0)
+  const tierGlobalMin = tiers.length > 0 ? Math.min(...tiers.map((t) => t.min)) : 0
+  const tierGlobalMax = tiers.length > 0 ? Math.max(...tiers.map((t) => t.max)) : 0
+
   const handleCreate = async () => {
-    const { totalPeople, dailyBudget, minAmount, maxAmount, startDate, endDate, title } = form
+    const { totalPeople, dailyBudget, startDate, endDate, title } = form
     if (totalPeople < 1 || dailyBudget < 1) { setError('請填寫有效的人數和金額'); return }
-    if (minAmount > maxAmount) { setError('最低金額不能大於最高金額'); return }
-    if (minAmount * totalPeople > dailyBudget) { setError('最低金額 × 人數 不能超過每日獎金'); return }
-    if (maxAmount * totalPeople < dailyBudget) { setError('最高金額 × 人數 不能小於每日獎金'); return }
     if (startDate > endDate) { setError('開始日期不能晚於結束日期'); return }
+
+    if (useTiers) {
+      // 獎級模式驗證
+      for (const tier of tiers) {
+        if (!tier.name.trim()) { setError('所有獎級必須有名稱'); return }
+        if (tier.min > tier.max) { setError(`「${tier.name}」最低金額不能大於最高金額`); return }
+        if (tier.min < 1) { setError(`「${tier.name}」最低金額必須大於 0`); return }
+        if (tier.quota < 1) { setError(`「${tier.name}」名額必須大於 0`); return }
+      }
+      if (tierQuotaSum !== totalPeople) {
+        setError(`獎級名額總和 (${tierQuotaSum}) 必須等於每日參加人數 (${totalPeople})`); return
+      }
+      if (tierBudgetMin > dailyBudget) {
+        setError(`所有獎級最低金額總和 (${formatMoney(tierBudgetMin)}) 超過每日獎金 (${formatMoney(dailyBudget)})`); return
+      }
+      if (tierBudgetMax < dailyBudget) {
+        setError(`所有獎級最高金額總和 (${formatMoney(tierBudgetMax)}) 低於每日獎金 (${formatMoney(dailyBudget)})`); return
+      }
+    } else {
+      // 簡單模式驗證
+      const { minAmount, maxAmount } = form
+      if (minAmount > maxAmount) { setError('最低金額不能大於最高金額'); return }
+      if (minAmount * totalPeople > dailyBudget) { setError('最低金額 × 人數 不能超過每日獎金'); return }
+      if (maxAmount * totalPeople < dailyBudget) { setError('最高金額 × 人數 不能小於每日獎金'); return }
+    }
 
     setError('')
     setLoading(true)
@@ -74,15 +111,17 @@ export default function HomePage() {
         title: title || '紅包抽獎',
         total_people: totalPeople,
         daily_budget: dailyBudget,
-        min_amount: minAmount,
-        max_amount: maxAmount,
+        // 獎級模式下，min/max 用全局最小/最大值滿足 DB constraint
+        min_amount: useTiers ? tierGlobalMin : form.minAmount,
+        max_amount: useTiers ? tierGlobalMax : form.maxAmount,
         start_date: startDate,
         end_date: endDate,
+        ...(useTiers ? { prize_tiers: tiers } : {}),
       })
       saveProjectId(project.id)
       router.push(`/p/${project.id}`)
-    } catch (err: any) {
-      setError(err?.message || '建立失敗，請稍後再試')
+    } catch (err: unknown) {
+      setError((err as { message?: string })?.message || '建立失敗，請稍後再試')
     } finally {
       setLoading(false)
     }
@@ -187,33 +226,160 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Min / Max */}
-          <div className="flex gap-3 mb-3.5">
-            <div className="flex-1">
-              <label className="block mb-1.5 text-sm font-semibold tracking-wider" style={{ color: 'rgba(255,215,0,0.7)' }}>
-                每包最低
-              </label>
-              <input
-                type="number"
-                className="w-full px-3.5 py-2.5 rounded-xl text-white text-[15px] transition-all"
-                style={{ background: 'rgba(0,0,0,0.3)', border: '1.5px solid rgba(255,215,0,0.2)' }}
-                value={form.minAmount}
-                onChange={(e) => set('minAmount', +e.target.value || 0)}
+          {/* Mode toggle */}
+          <div className="flex items-center justify-between mb-3.5 px-1">
+            <span className="text-sm font-semibold tracking-wider" style={{ color: 'rgba(255,215,0,0.7)' }}>
+              🏆 使用獎級設定
+            </span>
+            <button
+              type="button"
+              onClick={() => setUseTiers(!useTiers)}
+              className="relative w-12 h-6 rounded-full transition-all"
+              style={{
+                background: useTiers ? 'rgba(255,215,0,0.4)' : 'rgba(255,255,255,0.15)',
+                border: `1.5px solid ${useTiers ? 'rgba(255,215,0,0.6)' : 'rgba(255,255,255,0.2)'}`,
+              }}
+            >
+              <div
+                className="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                style={{
+                  background: useTiers ? '#ffd700' : 'rgba(255,255,255,0.5)',
+                  left: useTiers ? '26px' : '3px',
+                }}
               />
-            </div>
-            <div className="flex-1">
-              <label className="block mb-1.5 text-sm font-semibold tracking-wider" style={{ color: 'rgba(255,215,0,0.7)' }}>
-                每包最高
-              </label>
-              <input
-                type="number"
-                className="w-full px-3.5 py-2.5 rounded-xl text-white text-[15px] transition-all"
-                style={{ background: 'rgba(0,0,0,0.3)', border: '1.5px solid rgba(255,215,0,0.2)' }}
-                value={form.maxAmount}
-                onChange={(e) => set('maxAmount', +e.target.value || 0)}
-              />
-            </div>
+            </button>
           </div>
+
+          {!useTiers ? (
+            /* Simple Min / Max */
+            <div className="flex gap-3 mb-3.5">
+              <div className="flex-1">
+                <label className="block mb-1.5 text-sm font-semibold tracking-wider" style={{ color: 'rgba(255,215,0,0.7)' }}>
+                  每包最低
+                </label>
+                <input
+                  type="number"
+                  className="w-full px-3.5 py-2.5 rounded-xl text-white text-[15px] transition-all"
+                  style={{ background: 'rgba(0,0,0,0.3)', border: '1.5px solid rgba(255,215,0,0.2)' }}
+                  value={form.minAmount}
+                  onChange={(e) => set('minAmount', +e.target.value || 0)}
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block mb-1.5 text-sm font-semibold tracking-wider" style={{ color: 'rgba(255,215,0,0.7)' }}>
+                  每包最高
+                </label>
+                <input
+                  type="number"
+                  className="w-full px-3.5 py-2.5 rounded-xl text-white text-[15px] transition-all"
+                  style={{ background: 'rgba(0,0,0,0.3)', border: '1.5px solid rgba(255,215,0,0.2)' }}
+                  value={form.maxAmount}
+                  onChange={(e) => set('maxAmount', +e.target.value || 0)}
+                />
+              </div>
+            </div>
+          ) : (
+            /* Tier editor */
+            <div className="mb-3.5">
+              <div className="flex flex-col gap-2.5">
+                {tiers.map((tier, i) => (
+                  <div key={i} className="rounded-xl p-3 border" style={{ background: 'rgba(0,0,0,0.2)', borderColor: 'rgba(255,215,0,0.15)' }}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        className="flex-1 px-2.5 py-1.5 rounded-lg text-white text-sm font-semibold"
+                        style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,215,0,0.2)' }}
+                        value={tier.name}
+                        onChange={(e) => {
+                          const next = [...tiers]
+                          next[i] = { ...next[i], name: e.target.value }
+                          setTiers(next)
+                        }}
+                        placeholder="獎級名稱"
+                      />
+                      {tiers.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setTiers(tiers.filter((_, j) => j !== i))}
+                          className="text-xs px-2 py-1.5 rounded-lg"
+                          style={{ color: '#ff6b6b', background: 'rgba(255,107,107,0.1)' }}
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="block text-[10px] mb-0.5" style={{ color: 'rgba(255,215,0,0.5)' }}>最低</label>
+                        <input
+                          type="number"
+                          className="w-full px-2 py-1.5 rounded-lg text-white text-sm"
+                          style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,215,0,0.15)' }}
+                          value={tier.min}
+                          onChange={(e) => {
+                            const next = [...tiers]
+                            next[i] = { ...next[i], min: +e.target.value || 0 }
+                            setTiers(next)
+                          }}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-[10px] mb-0.5" style={{ color: 'rgba(255,215,0,0.5)' }}>最高</label>
+                        <input
+                          type="number"
+                          className="w-full px-2 py-1.5 rounded-lg text-white text-sm"
+                          style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,215,0,0.15)' }}
+                          value={tier.max}
+                          onChange={(e) => {
+                            const next = [...tiers]
+                            next[i] = { ...next[i], max: +e.target.value || 0 }
+                            setTiers(next)
+                          }}
+                        />
+                      </div>
+                      <div className="w-16">
+                        <label className="block text-[10px] mb-0.5" style={{ color: 'rgba(255,215,0,0.5)' }}>名額</label>
+                        <input
+                          type="number"
+                          className="w-full px-2 py-1.5 rounded-lg text-white text-sm"
+                          style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,215,0,0.15)' }}
+                          value={tier.quota}
+                          onChange={(e) => {
+                            const next = [...tiers]
+                            next[i] = { ...next[i], quota: +e.target.value || 0 }
+                            setTiers(next)
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {tiers.length < 6 && (
+                <button
+                  type="button"
+                  onClick={() => setTiers([...tiers, { name: `${tiers.length + 1}獎`, min: 50, max: 200, quota: 1 }])}
+                  className="w-full mt-2 py-2 rounded-xl text-sm font-semibold tracking-wider"
+                  style={{ color: 'rgba(255,215,0,0.6)', background: 'rgba(255,215,0,0.06)', border: '1px dashed rgba(255,215,0,0.2)' }}
+                >
+                  + 新增獎級
+                </button>
+              )}
+              {/* Tier summary */}
+              <div className="mt-2.5 rounded-xl px-3 py-2" style={{ background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.12)' }}>
+                <div className="text-xs" style={{ color: tierQuotaSum === form.totalPeople ? 'rgba(255,215,0,0.7)' : '#ff6b6b' }}>
+                  📊 名額總計 {tierQuotaSum} / {form.totalPeople} 人
+                  {tierQuotaSum !== form.totalPeople && ' ⚠️ 不一致'}
+                </div>
+                <div className="text-xs mt-0.5" style={{
+                  color: tierBudgetMin <= form.dailyBudget && tierBudgetMax >= form.dailyBudget
+                    ? 'rgba(255,215,0,0.7)' : '#ff6b6b'
+                }}>
+                  💰 預算範圍 {formatMoney(tierBudgetMin)} ~ {formatMoney(tierBudgetMax)}
+                  {(tierBudgetMin > form.dailyBudget || tierBudgetMax < form.dailyBudget) && ' ⚠️ 與每日獎金不符'}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Preview */}
           {days.length > 0 && (

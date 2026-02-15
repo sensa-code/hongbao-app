@@ -5,9 +5,11 @@ import { formatMoney } from '@/lib/supabase'
 
 export default function EnvelopeAnimation({
   amount,
+  tierName,
   onDone,
 }: {
   amount: number
+  tierName?: string
   onDone: () => void
 }) {
   const [phase, setPhase] = useState(0)
@@ -79,7 +81,7 @@ export default function EnvelopeAnimation({
             ) : (
               <div className="text-center animate-popIn">
                 <div className="text-sm font-semibold" style={{ color: '#8B0000' }}>
-                  恭喜
+                  {tierName || '恭喜'}
                 </div>
                 <div className="text-xl font-black" style={{ color: '#8B0000' }}>
                   {formatMoney(amount)}
